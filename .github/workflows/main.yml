@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  testes_ruby:
+    name: Testes RUBY
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 2.7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo bin/instaladores/dependencias_execucao_install.sh && sudo bin/instaladores/dependencias_desenvolvimento_install.sh
+          sudo bin/instaladores/pandoc_install.sh -q
+
+      - name: Verify pandoc version
+        run: pandoc -v
+
+      - name: Clone modelo-oficial repository
+        run: git clone --depth=1 https://github.com/abntex/trabalho-academico-limarka.git modelo-oficial
+
+      - name: Run RSpec tests
+        run: bundle exec rake spec:ruby
+
+      - name: Run Cucumber tests
+        run: bundle exec rake cucumber:ruby
+
+  testes_latex:
+    name: Testes com LaTeX (PDFs)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 2.7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo bin/instaladores/dependencias_execucao_install.sh && sudo bin/instaladores/dependencias_desenvolvimento_install.sh
+          sudo bin/instaladores/pandoc_install.sh -q
+          sudo bin/instaladores/tinytex_install.sh
+          export PATH=$PATH:~/.TinyTeX/bin/x86_64-linux
+
+      - name: Verify tools versions
+        run: |
+          tlmgr --version && tlmgr show --only-installed
+          latexmk -v
+          xelatex -v
+          pdftotext -v
+          pandoc -v
+
+      - name: Clone modelo-oficial repository
+        run: git clone --depth=1 https://github.com/abntex/trabalho-academico-limarka.git modelo-oficial
+
+      - name: Run RSpec tests (latex_spec.rb)
+        run: bundle exec rspec spec/dependencias/latex_spec.rb
+
+      - name: Run RSpec tests (simples_spec.rb)
+        run: bundle exec rspec spec/simples_spec.rb
+
+      - name: Run PDF generation tests
+        run: |
+          bundle exec rake spec:pdf
+          bundle exec rake cucumber:pdf
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          cat test/latex/exemplo-minimo/xxx-Monografia.log
+          cat tmp/simples/xxx-trabalho-academico.tex
+          cat tmp/simples/xxx-trabalho-academico.log
+          cat tmp/simples/xxx-trabalho-academico.txt
+
+  deploy_docker_and_rubygems:
+    name: Deploy Docker and RubyGems
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Print environment variables
+        run: echo tag ${{ github.ref }} slug ${{ github.repository }} branch ${{ github.ref_name }}
+
+      - name: Deploy to RubyGems
+        if: github.ref == 'refs/heads/master'
+        run: |
+          echo ${{ secrets.RUBYGEMS_API_KEY }} | gem push
+          # Replace `secrets.RUBYGEMS_API_KEY` with the actual secret name
+
+      - name: Deploy to Docker
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
+        run: |
+          bin/build-docker.sh && bin/deploy-docker.sh
+          if [[ ${{ github.ref }} == refs/tags/* ]]; then
+            bin/build-docker.sh && bin/deploy-docker.sh ${{ github.ref }}
+          fi
+
+      - name: Show TinyTeX log
+        run: cat /root/.TinyTeX/texmf-var/web2c/tlmgr.log
